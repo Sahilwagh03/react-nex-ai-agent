@@ -7,6 +7,7 @@ from crewai import Agent, Task, Crew, Process
 from langchain_google_genai import ChatGoogleGenerativeAI
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+import uvicorn
 
 # Load environment variables
 load_dotenv()
@@ -104,3 +105,8 @@ async def generate_code(request: PromptRequest):
 @app.get("/")
 async def root():
     return {"message": "Welcome to the Code Generation API! Use /generate-code to generate code based on a prompt."}
+
+
+# Add this in your script to run the app on the correct host and port
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
