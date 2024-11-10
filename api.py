@@ -1,0 +1,106 @@
+import json
+import os
+import asyncio
+from dotenv import load_dotenv
+from crewai_tools import CodeDocsSearchTool
+from crewai import Agent, Task, Crew, Process
+from langchain_google_genai import ChatGoogleGenerativeAI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+# Load environment variables
+load_dotenv()
+
+# Configure the FastAPI app
+app = FastAPI()
+
+# Configure the CodeDocsSearchTool for your documentation site with Google embeddings
+docs_tool = CodeDocsSearchTool(
+    docs_url='https://react-nex-docs.vercel.app/',
+    config=dict(
+        embedder=dict(
+            provider="google",
+            config=dict(model="models/embedding-001", task_type="retrieval_document"),
+        )
+    )
+)
+
+# Function to initialize the LLM asynchronously
+async def initialize_llm():
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash",
+        verbose=True,
+        temperature=0.5,
+        google_api_key=os.getenv("GOOGLE_API_KEY")
+    )
+    return llm
+
+# Create the MERN Developer agent with CodeDocsSearchTool
+async def create_agent(llm):
+    mern_dev_agent = Agent(
+        role="Professional MERN Developer",
+        goal="Generate optimized and accurate code snippets in response to {prompt}",
+        memory=True,
+        verbose=True,
+        backstory=(
+            "An experienced MERN developer proficient in React.js and Tailwind CSS,"
+            "creating tailored solutions by leveraging the provided documentation."
+        ),
+        tools=[docs_tool],
+        llm=llm
+    )
+    return mern_dev_agent
+
+# Define a code generation task with an emphasis on using custom components
+async def create_task(mern_dev_agent):
+    code_generation_task = Task(
+        description=(
+            "Retrieve relevant data from the documentation site and generate code for {prompt}."
+            "Ensure that the code follows best practices in React.js and Tailwind CSS, strictly using"
+            "the components from the React-Nex library (e.g., <Button> instead of native HTML elements)."
+        ),
+        expected_output="Code snippet using React-Nex components for {prompt}.",
+        tools=[docs_tool],
+        agent=mern_dev_agent,
+    )
+    return code_generation_task
+
+# Configure the Crew to execute the process sequentially
+async def create_crew(mern_dev_agent, code_generation_task):
+    crew = Crew(
+        agents=[mern_dev_agent],
+        tasks=[code_generation_task],
+        process=Process.sequential,
+    )
+    return crew
+
+# Define request model for API
+class PromptRequest(BaseModel):
+    prompt: str
+
+# Endpoint to handle code generation based on prompt
+@app.post("/generate-code")
+async def generate_code(request: PromptRequest):
+    try:
+        # Initialize LLM and agent
+        llm = await initialize_llm()
+        mern_dev_agent = await create_agent(llm)
+        code_generation_task = await create_task(mern_dev_agent)
+        crew = await create_crew(mern_dev_agent, code_generation_task)
+
+        # Execute the task with the user prompt
+        result = crew.kickoff(inputs={'prompt': request.prompt})
+
+        if result:
+            # Strip formatting characters from the result and return as JSON
+            cleaned_code = result.strip("```javascript").strip("```")
+            return {"prompt": request.prompt, "generated_code": result}
+        else:
+            raise HTTPException(status_code=500, detail="Unexpected result format")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Root endpoint to verify server status
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the Code Generation API! Use /generate-code to generate code based on a prompt."}
